@@ -84,33 +84,76 @@ def reorganize_if_nearby(alternatives, threshold):
     reorganized = nearby + [alt for alt in alternatives if alt not in nearby]
     return reorganized
 
+def jobs_status (job_statuses):
+    total_jobs = 0
+    succeeded_count = 0
+    failed_count = 0
+    pending_count = 0
+    total_execution_time = 0
+
+    for status in job_statuses.values():
+        total_jobs += 1
+        if status['status'] == 'Succeeded':
+            succeeded_count += 1
+            creation_time = time.strptime(status['creation_time'], "%Y-%m-%dT%H:%M:%SZ")
+            finish_time = time.strptime(status['finish_time'], "%Y-%m-%dT%H:%M:%SZ")
+            duration = time.mktime(finish_time) - time.mktime(creation_time)
+            total_execution_time += duration
+        elif status['status'] == 'Failed':
+            failed_count += 1
+        elif status['status'] == 'Pending':
+            pending_count += 1
+        if succeeded_count > 0:
+            average_execution_time = total_execution_time / succeeded_count
+        else:
+            average_execution_time = 0
+    return average_execution_time,pending_count
+
+def get_headers(cred):
+    if 'token' in cred and cred['token']:
+        headers = {'Authorization': "Bearer " + cred['token'] }
+
+    elif 'user' in cred and cred['user'] and 'password' in cred and cred['password']:
+        auth = base64.b64encode(f"{cred['user']}:{cred['password']}".encode()).decode()
+        headers = {"Authorization": f"Basic {auth}"}
+    else:
+        print(f"Error with credentials to {cred['url']}")
+        headers = {"Authorization": ""}
+    return headers 
+
 def main():
     delegation= "topsis"
     credentials = [
-        {"url": "https://musing-haslett2.im.grycap.net1", "user": "oscar", "password": "oscar123", "service": "grayifyr0","priority":2},
-        {"url": "https://frosty-easley9.im.grycap.net", "user": "oscar", "password": "oscar123", "service": "grayifyr1","priority":3},
-        {"url": "https://condescending-albattani4.im.grycap.net", "user": "oscar", "password": "oscar123", "service": "grayify", "priority":1}
+        {"url": "https://musing-haslett2.im.grycap.net", "user": "oscar", "password": "oscar123","token":"", "service": "grayifyr0","priority":2},
+        {"url": "https://frosty-easley9.im.grycap.net", "user": "oscar", "password": "oscar123","token":"", "service": "grayifyr1","priority":3},
+        {"url": "https://condescending-albattani4.im.grycap.net", "user": "oscar", "password": "oscar123","token":"", "service": "grayify", "priority":1}
     ]
+    
+    final_delegation = [{"url": "", "user": "", "password": "", "token": "", "service": "", "priority": None} for _ in credentials]
+    
 
-    service_cpu = 0.5
     noDelegateCode=101
     results=[]
     
-    
-
     for i, cred in enumerate(credentials):
-        auth = base64.b64encode(f"{cred['user']}:{cred['password']}".encode()).decode()
-        headers = {"Authorization": f"Basic {auth}"}
+        
+        headers=get_headers(cred)
 
         try:
+            url_service = f"{cred['url']}/system/services/{cred['service']}"
+            response = requests.get(url_service, headers=headers, verify=False, timeout=20)
+            cluster_service = response.json()
+            cpu_service=float(cluster_service['cpu'])
+            
+            
             # Realizar solicitud a /system/logs
             url_status = f"{cred['url']}/system/status"
             response = requests.get(url_status, headers=headers, verify=False, timeout=20)
             cluster_status = response.json()
-
-            dist = cluster_status['cpuMaxFree'] - (1000 * service_cpu)
-
             
+
+            dist = cluster_status['cpuMaxFree'] - (1000 * cpu_service)
+                        
             if dist >= 0:
                 if delegation=="static":
                     print("Ordenado por priority manual")
@@ -130,34 +173,11 @@ def main():
                     start_time = time.time()
                     response = requests.get(url_jobs, headers=headers, verify=False, timeout=20)
                     latency=time.time() - start_time
-            
-            
-
+             
                     job_statuses = response.json()
+                    
+                    average_execution_time,pending_count =jobs_status(job_statuses)
 
-                    total_jobs = 0
-                    succeeded_count = 0
-                    failed_count = 0
-                    pending_count = 0
-                    total_execution_time = 0
-
-                    for status in job_statuses.values():
-                        total_jobs += 1
-                        if status['status'] == 'Succeeded':
-                            succeeded_count += 1
-                            creation_time = time.strptime(status['creation_time'], "%Y-%m-%dT%H:%M:%SZ")
-                            finish_time = time.strptime(status['finish_time'], "%Y-%m-%dT%H:%M:%SZ")
-                            duration = time.mktime(finish_time) - time.mktime(creation_time)
-                            total_execution_time += duration
-                        elif status['status'] == 'Failed':
-                            failed_count += 1
-                        elif status['status'] == 'Pending':
-                            pending_count += 1
-
-                    if succeeded_count > 0:
-                       average_execution_time = total_execution_time / succeeded_count
-                    else:
-                       average_execution_time = 0
                     result = [
                     latency,
                     cluster_status['numberNodes'],
@@ -191,8 +211,7 @@ def main():
 
     # Normalizar y ponderar la matriz de resultados
         print("Matriz de resultados:")
-        for row in results:
-            print(row)
+        
         normalized_matrix = normalize_matrix(results)
         weighted_matrix = weight_matrix(normalized_matrix, weights)
 
@@ -203,17 +222,81 @@ def main():
         preferences = calculate_preferences(weighted_matrix, ideal, anti_ideal)
         sorted_alternatives = sort_alternatives(preferences)
         
+        
     # Calcular el umbral y reorganizar si es necesario
-        threshold = sorted_alternatives[0]['preference'] / 10
+        threshold = sorted_alternatives[0]['preference'] / 3
         reorganized_alternatives = reorganize_if_nearby(sorted_alternatives, threshold) 
+        print("Alternativas: ")
+        for row in reorganized_alternatives:
+            print(row)
         print("\nAlternativas reorganizadas:")
-        for alt in reorganized_alternatives:
-            
+        for i,alt in enumerate(reorganized_alternatives):
             mappedCPUPriority = mapRange(alt['preference'], 0, 1, 100, 0)
             print(f"Alternativa {alt['index']}: {alt['preference']} : {mappedCPUPriority}")
             credentials[alt['index']-1]["priority"]=mappedCPUPriority
-    credentials.sort(key=lambda cred: cred['priority'])
+            final_delegation[i]=credentials[alt['index']-1]
+            
+            
+    credentials=final_delegation
+    #credentials.sort(key=lambda cred: cred['priority'])
     print("Replicas Stable: ", credentials)
+
+    print("Imagen a procesar")
+    dir_img="image-orig_1.jpg"
+   # img = mpimg.imread(dir_img)
+    #plt.imshow(img)  
+
+    with open(dir_img, 'rb') as binary_file:
+        binary_file_data = binary_file.read()
+        base64_encoded_data = base64.b64encode(binary_file_data)
+        base64_message = base64_encoded_data.decode('utf-8')
+        my_string = base64_message
+
+    
+    
+
+    # Peticion POST
+    for i, cluster in enumerate(credentials):
+
+        headers=get_headers(cluster)
+
+        url_service = f"{cluster['url']}/system/services/{cluster['service']}"
+        
+        url_run = f"{cluster['url']}/job/{cluster['service']}"
+        try:
+            response = requests.get(url_service, headers=headers, verify=False, timeout=20)
+            cluster_service = response.json()
+            token_service=cluster_service['token']
+            
+            headers = {    
+                'Authorization': "Bearer " + token_service,
+                'Content-Type': 'application/json',
+            }
+            
+            response = requests.post(url_run, headers=headers, data=my_string,verify=False, timeout=20)
+            
+            if response.status_code == 200 or response.status_code == 201:
+                print(f"Services OK to {cluster['url']}")
+                ## ver la respuesta o no
+                """
+                texto=response.text
+                print(response.json)
+                inicio=texto.find('response')
+                img_data=texto[inicio+9:]
+                image_64_decode = base64.b64decode(img_data)
+
+#image_64_decode = base64.decodestring(img_data) 
+                image_result = open('decode.jpg', 'wb') # create a writable image and write the decoding result
+                image_result.write(image_64_decode)
+                image_result.close()
+                """
+                break
+                
+            else:
+                print(response.status_code)
+          #print(response.text)
+        except Exception as ex:
+            print(f"Error running service in {cluster['url']} : {ex}")
     
 if __name__ == "__main__":
     main()
